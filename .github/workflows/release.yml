@@ -1,0 +1,111 @@
+name: Build & Release APK
+
+on:
+  push:
+    tags:
+      - "v*"          # triggers on tags like v1.0.0, v2.3.1, etc.
+  workflow_dispatch:       # manual trigger from the Actions tab
+    inputs:
+      version_name:
+        description: "Version name (e.g. 1.2.0)"
+        required: false
+        default: ""
+
+# ─── permissions ─────────────────────────────────────────────────────────────
+permissions:
+  contents: write          # needed to create a GitHub Release + upload assets
+
+jobs:
+  build-and-release:
+    name: Build signed APK & publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history so we can derive version from tags
+
+      # ── 2. Resolve version info ───────────────────────────────────────────────
+      - name: Compute version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"        # e.g.  v1.2.3
+            VER="${TAG#v}"                         # e.g.  1.2.3
+          else
+            VER="${{ github.event.inputs.version_name }}"
+            VER="${VER:-0.0.0-dev}"
+            TAG="v${VER}"
+          fi
+
+          # version code = total commits (simple, monotonically increasing)
+          CODE=$(git rev-list --count HEAD)
+
+          echo "tag=${TAG}"    >> "$GITHUB_OUTPUT"
+          echo "name=${VER}"   >> "$GITHUB_OUTPUT"
+          echo "code=${CODE}"  >> "$GITHUB_OUTPUT"
+
+      # ── 3. JDK (Temurin 17 – smallest footprint that satisfies AGP 9) ────────
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle       # caches ~/.gradle; saves ~1–2 min on warm runs
+
+      # ── 4. Decode keystore from secret ────────────────────────────────────────
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/release.jks"
+
+      # ── 5. Make gradlew executable ──────────
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # ── 6. Build release APK ──────────────────────────────────────────────────
+      - name: Build release APK
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      # ── 7. Rename APK to something readable ──────────────────────────────────
+      - name: Rename APK
+        id: apk
+        run: |
+          SRC=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          DST="TinyHands-${{ steps.version.outputs.name }}.apk"
+          mv "$SRC" "$DST"
+          echo "path=${DST}" >> "$GITHUB_OUTPUT"
+
+      # ── 8. Upload APK as workflow artifact (always available, even pre-release) ─
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: TinyHands-${{ steps.version.outputs.name }}
+          path: ${{ steps.apk.outputs.path }}
+          retention-days: 30
+
+      # ── 9. Create GitHub Release (only on real tags) ──────────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "TinyHands ${{ steps.version.outputs.name }}"
+          body: |
+            ## TinyHands ${{ steps.version.outputs.name }}
+
+            Built from commit ${{ github.sha }} · version code `${{ steps.version.outputs.code }}`
+
+            ### Install
+            Download the APK below and enable *Install from unknown sources* on your device.
+          files: ${{ steps.apk.outputs.path }}
+          draft: false
+          prerelease: false

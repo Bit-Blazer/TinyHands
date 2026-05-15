@@ -1,3 +1,39 @@
 <resources>
     <string name="app_name">TinyHands</string>
+    <string name="app_title">Touch Blocker</string>
+    <string name="app_subtitle">Protect your screen during video calls</string>
+
+    <!-- Status -->
+    <string name="status_off">Overlay OFF</string>
+    <string name="status_unlocked">Active — Unlocked</string>
+    <string name="status_locked">Active — LOCKED 🔒</string>
+
+    <!-- Buttons -->
+    <string name="btn_enable">Enable Protection</string>
+    <string name="btn_disable">Disable Protection</string>
+    <string name="btn_grant_permission">Grant Permission</string>
+
+    <!-- Permission warning -->
+    <string name="permission_warning">Draw over other apps permission is required</string>
+
+    <!-- Instructions -->
+    <string name="instructions_line1">Once enabled, switch to your video call app.</string>
+    <string name="instructions_line2">Triple-tap anywhere to toggle lock on/off.</string>
+
+    <!-- Notification -->
+    <string name="notif_channel_name">Touch Blocker</string>
+    <string name="notif_title">Touch Blocker Active</string>
+    <string name="notif_text_unlocked">Triple-tap to toggle lock</string>
+    <string name="notif_text_locked">Screen is LOCKED — triple-tap to unlock</string>
+    <string name="notif_action_disable">Disable</string>
+
+    <!-- QS Tile -->
+    <string name="tile_label">TinyHands</string>
+    <string name="tile_subtitle_no_permission">Permission needed</string>
+    <string name="tile_subtitle_inactive">Tap to enable</string>
+    <string name="tile_subtitle_unlocked">Active — unlocked</string>
+    <string name="tile_subtitle_locked">Locked 🔒</string>
+    <!-- Shortcuts -->
+    <string name="shortcut_short_label">Toggle</string>
+    <string name="shortcut_long_label">Toggle Protection</string>
 </resources>

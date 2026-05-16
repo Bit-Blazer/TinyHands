@@ -293,19 +293,13 @@ private fun StatusCard(state: AppState) {
             MaterialTheme.colorScheme.surfaceVariant,
             Icons.Default.LockOpen,
             "Overlay OFF",
-            "Protection is not active"
-        )
-        state.locked -> Quad(
-            MaterialTheme.colorScheme.errorContainer,
-            Icons.Default.Lock,
-            "LOCKED 🔒",
-            "Screen is locked — touches are blocked"
+            "Tap below to activate"
         )
         else -> Quad(
-            MaterialTheme.colorScheme.primaryContainer,
-            Icons.Default.LockOpen,
-            "Active — Unlocked",
-            "Overlay is running, touches pass through"
+            MaterialTheme.colorScheme.errorContainer,
+            Icons.Default.Lock,
+            "LOCKED",
+            "All touches blocked — triple-tap to deactivate"
         )
     }
 
@@ -391,11 +385,11 @@ private fun InstructionsCard() {
                 fontWeight = FontWeight.SemiBold
             )
             Spacer(Modifier.height(8.dp))
-            InstructionRow("1.", "Enable Protection below.")
-            InstructionRow("2.", "Switch to your video call app.")
-            InstructionRow("3.", "Triple-tap anywhere to toggle lock on/off.")
-            InstructionRow("4.", "Locked: amber border visible, all touches blocked.")
-            InstructionRow("5.", "Disable via the notification or return here.")
+            InstructionRow("1.", "Tap \"Enable Protection\" below (or use the Quick Settings tile).")
+            InstructionRow("2.", "Overlay activates instantly — amber border confirms it's ON.")
+            InstructionRow("3.", "Hand the phone to the baby. All touches are blocked.")
+            InstructionRow("4.", "To take the phone back: triple-tap anywhere on the screen.")
+            InstructionRow("5.", "Overlay deactivates — phone returns to normal.")
         }
     }
 }

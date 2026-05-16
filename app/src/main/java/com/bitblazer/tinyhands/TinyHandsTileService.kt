@@ -8,6 +8,7 @@ import android.os.Build
 import android.provider.Settings
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import android.graphics.drawable.Icon
 
 class TinyHandsTileService : TileService() {
 
@@ -36,32 +37,19 @@ class TinyHandsTileService : TileService() {
     override fun onClick() {
         super.onClick()
 
-        if (!isOverlayPermissionGranted(this)) {
-            // Send user to overlay permission settings
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                android.net.Uri.parse("package:$packageName")
-            ).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                val pendingIntent = android.app.PendingIntent.getActivity(
-                    this, 0, intent, android.app.PendingIntent.FLAG_IMMUTABLE
-                )
-                startActivityAndCollapse(pendingIntent)
-            } else {
-                @Suppress("DEPRECATION")
-                startActivityAndCollapse(intent)
-            }
-            return
+        val intent = Intent(this, ShortcutHandlerActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
-        if (OverlayService.isRunning) {
-            stopService(Intent(this, OverlayService::class.java))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val pendingIntent = android.app.PendingIntent.getActivity(
+                this, 0, intent, android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            startActivityAndCollapse(pendingIntent)
         } else {
-            startForegroundService(Intent(this, OverlayService::class.java))
+            @Suppress("DEPRECATION")
+            startActivityAndCollapse(intent)
         }
-        updateTile()
     }
 
     // ── Tile state update ─────────────────────────────────────────────────────
@@ -76,6 +64,12 @@ class TinyHandsTileService : TileService() {
             !permOk  -> Tile.STATE_UNAVAILABLE
             !running -> Tile.STATE_INACTIVE
             else     -> Tile.STATE_ACTIVE
+        }
+
+        tile.icon = if (running) {
+            Icon.createWithResource(this, R.drawable.ic_lock)
+        } else {
+            Icon.createWithResource(this, R.drawable.ic_tile)
         }
 
         val subtitle = when {

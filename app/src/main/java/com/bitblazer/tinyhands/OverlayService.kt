@@ -12,18 +12,22 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.view.Gravity
 import android.view.WindowManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 class OverlayService : Service() {
 
-    // ── Companion — shared state readable by TileService / MainActivity ───────
+
+    // ── Shared state (readable by TileService / MainActivity) ─────────────────
     companion object {
+        private const val TAG = "TinyHands/OverlayService"
         const val NOTIFICATION_ID = 1001
         const val CHANNEL_ID = "touch_blocker_channel"
 
         @Volatile var isRunning: Boolean = false
         @Volatile var isLocked: Boolean = false
     }
+
 
     // ── Fields ────────────────────────────────────────────────────────────────
 
@@ -48,19 +52,19 @@ class OverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        Log.i(TAG, "onCreate")
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Handle stop action from notification button
+        Log.i(TAG, "onStartCommand action=${intent?.action}")
         if (intent?.action == Actions.STOP_SERVICE) {
+            Log.i(TAG, "Stop action received — stopping self")
             stopSelf()
             return START_NOT_STICKY
         }
-
-        // Only set up overlay once
         if (!viewAttached) {
             setupOverlay()
         }
@@ -70,106 +74,91 @@ class OverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        Log.i(TAG, "onDestroy — cleaning up overlay")
         isRunning = false
         isLocked = false
 
-        // Remove overlay view
         if (viewAttached) {
             try {
                 windowManager.removeView(overlayView)
+                Log.d(TAG, "Overlay view removed")
             } catch (e: Exception) {
-                // View may have already been removed
+                Log.w(TAG, "removeView failed: ${e.message}")
             }
             viewAttached = false
         }
 
-        // Unregister display listener
         (getSystemService(DISPLAY_SERVICE) as DisplayManager)
             .unregisterDisplayListener(displayListener)
 
-        // Release wake lock
-        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock?.let {
+            if (it.isHeld) {
+                it.release()
+                Log.d(TAG, "WakeLock released")
+            }
+        }
 
-        // Broadcast state update
         broadcastState()
-
         super.onDestroy()
     }
 
     // ── Overlay setup ─────────────────────────────────────────────────────────
 
     private fun setupOverlay() {
-        // Build overlay params — start in UNLOCKED (pass-through) mode
+        Log.i(TAG, "setupOverlay — starting in LOCKED mode")
+
+        // No FLAG_NOT_TOUCHABLE — overlay must receive touches so triple-tap detection works.
+        // Touch blocking is handled by BlockingOverlayView.onTouchEvent returning true.
         layoutParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,   // pass-through when unlocked
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
         }
 
+        // Triple-tap → deactivate (stop service entirely)
         overlayView = BlockingOverlayView(this).apply {
-            onToggleCallback = ::toggleLockState
+            onToggleCallback = ::deactivate
         }
 
         try {
             windowManager.addView(overlayView, layoutParams)
             viewAttached = true
+            Log.d(TAG, "Overlay view attached to WindowManager")
         } catch (e: WindowManager.BadTokenException) {
+            Log.e(TAG, "BadTokenException attaching overlay: ${e.message}")
             stopSelf()
             return
         }
 
-        // Register display listener for rotation handling
         (getSystemService(DISPLAY_SERVICE) as DisplayManager)
             .registerDisplayListener(displayListener, null)
 
-        // Acquire wake lock to keep screen on
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         @Suppress("DEPRECATION")
         wakeLock = pm.newWakeLock(
             PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
             "TinyHands:OverlayWakeLock"
-        ).also { it.acquire(10 * 60 * 60 * 1000L /* 10 hours max */) }
+        ).also { it.acquire(10 * 60 * 60 * 1000L) }
+        Log.d(TAG, "WakeLock acquired")
 
-        // Start foreground
         isRunning = true
-        isLocked = false
+        isLocked = true   // always locked while overlay is running
         startForeground(NOTIFICATION_ID, buildNotification())
         broadcastState()
+        Log.i(TAG, "Overlay active and locked")
     }
 
-    // ── Lock toggle ───────────────────────────────────────────────────────────
+    // ── Deactivation (triggered by triple-tap) ────────────────────────────────
 
-    fun toggleLockState() {
-        isLocked = !isLocked
-
-        if (isLocked) {
-            // Remove FLAG_NOT_TOUCHABLE → overlay intercepts all touches
-            layoutParams.flags = layoutParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-        } else {
-            // Add FLAG_NOT_TOUCHABLE → touches pass through overlay
-            layoutParams.flags = layoutParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        }
-
-        if (viewAttached) {
-            try {
-                windowManager.updateViewLayout(overlayView, layoutParams)
-                overlayView.setLocked(isLocked)
-            } catch (e: Exception) {
-                stopSelf()
-                return
-            }
-        }
-
-        // Update notification to reflect new state
-        notificationManager.notify(NOTIFICATION_ID, buildNotification())
-        broadcastState()
+    private fun deactivate() {
+        Log.i(TAG, "deactivate() — triple-tap received, stopping service")
+        stopSelf()
     }
 
     // ── Display / rotation handling ───────────────────────────────────────────

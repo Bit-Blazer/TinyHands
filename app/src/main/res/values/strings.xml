@@ -6,7 +6,7 @@
     <!-- Status -->
     <string name="status_off">Overlay OFF</string>
     <string name="status_unlocked">Active — Unlocked</string>
-    <string name="status_locked">Active — LOCKED 🔒</string>
+    <string name="status_locked">Active — LOCKED</string>
 
     <!-- Buttons -->
     <string name="btn_enable">Enable Protection</string>
@@ -32,7 +32,7 @@
     <string name="tile_subtitle_no_permission">Permission needed</string>
     <string name="tile_subtitle_inactive">Tap to enable</string>
     <string name="tile_subtitle_unlocked">Active — unlocked</string>
-    <string name="tile_subtitle_locked">Locked 🔒</string>
+    <string name="tile_subtitle_locked">Locked</string>
     <!-- Shortcuts -->
     <string name="shortcut_short_label">Toggle</string>
     <string name="shortcut_long_label">Toggle Protection</string>

@@ -5,162 +5,174 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.drawable.Drawable
 import android.os.SystemClock
+import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.DrawableCompat
+import kotlin.math.hypot
 
 /**
- * Full-screen transparent overlay view that:
- *  - Consumes all touch events when locked (WindowManager flag handles pass-through when unlocked)
- *  - Draws a subtle lock-state indicator (pill badge) in the top-right corner
- *  - Detects a triple-tap within [TAP_TIMEOUT_MS] to toggle lock state
+ * Minimal overlay: no tint, no border.
+ * Shows a small padlock card in the top-right corner.
+ * Triple-tap is position-locked (all 3 taps within TAP_RADIUS_DP of each other).
  */
 class BlockingOverlayView(context: Context) : View(context) {
 
-    // ── Public API ────────────────────────────────────────────────────────────
+    companion object {
+        private const val TAG           = "TinyHands/OverlayView"
+        private const val TAP_TIMEOUT_MS = 600L   // all 3 taps must land within this window
+        private const val TAP_RADIUS_DP  = 80f    // all taps must stay within this radius
+        private const val TAP_RESET_MS   = 2500L  // reset progress after idle
+    }
 
-    /** Called when a valid triple-tap is detected. Set by OverlayService. */
     var onToggleCallback: (() -> Unit)? = null
 
-    /** Current lock state — drives visual rendering. */
-    private var isLocked: Boolean = false
+    // ── Triple-tap state ──────────────────────────────────────────────────────
 
-    /** Whether the pill badge is currently visible. */
-    private var pillVisible: Boolean = false
+    private val tapTimes   = LongArray(3) { 0L }
+    private var anchorX    = -1f   // X of first tap in current sequence
+    private var anchorY    = -1f   // Y of first tap in current sequence
+    private var tapProgress = 0    // 0=idle, 1=one tap done, 2=two taps done
+    private val tapRadiusPx = dpToPx(context, TAP_RADIUS_DP).toFloat()
 
-    // ── Triple-tap detection ──────────────────────────────────────────────────
+    private val resetRunnable = Runnable {
+        Log.d(TAG, "Tap progress reset (idle)")
+        tapProgress = 0; tapTimes.fill(0L); anchorX = -1f; anchorY = -1f
+        invalidate()
+    }
 
-    private val tapTimes = LongArray(3) { 0L }
-    private val TAP_TIMEOUT_MS = 600L
+    // ── Card geometry ─────────────────────────────────────────────────────────
 
-    // ── Paint objects ─────────────────────────────────────────────────────────
+    private val cardW      = dpToPx(context, 64f).toFloat()
+    private val cardMarginR = dpToPx(context, 16f).toFloat()
+    private val cardMarginT = dpToPx(context, 48f).toFloat()  // below status bar
+    private val cardPad    = dpToPx(context, 10f).toFloat()
+    private val cardCorner = dpToPx(context, 18f).toFloat()
+    private val dotR       = dpToPx(context, 4.5f).toFloat()
+    private val dotGap     = dpToPx(context, 13f).toFloat()   // center-to-center
+
+    // ── Paint ─────────────────────────────────────────────────────────────────
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#18FF6600")   // faint amber tint (locked only)
         style = Paint.Style.FILL
+        color = Color.argb(0xCC, 0x15, 0x15, 0x15)
     }
 
-    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#AAFFA040")   // soft amber border (locked only)
-        style = Paint.Style.STROKE
-        strokeWidth = dpToPx(context, 3f).toFloat()
+    private val lockDrawable: Drawable? = ContextCompat.getDrawable(context, R.drawable.ic_lock)?.apply {
+        DrawableCompat.setTint(this, Color.WHITE)
     }
 
-    private val pillBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#CC000000")   // dark semi-transparent pill
+    private val dotFilled = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
+        color = Color.argb(0xFF, 0x42, 0xA5, 0xF5)  // blue
     }
 
-    private val pillTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textSize = dpToPx(context, 13f).toFloat()
-        isFakeBoldText = true
-        textAlign = Paint.Align.LEFT
+    private val dotEmpty = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style       = Paint.Style.STROKE
+        strokeWidth = dpToPx(context, 1.5f).toFloat()
+        color       = Color.argb(0x88, 0xFF, 0xFF, 0xFF)
     }
 
-    private val pillRect = RectF()
-    private val pillCornerRadius = dpToPx(context, 14f).toFloat()
-    private val pillPaddingH = dpToPx(context, 12f).toFloat()
-    private val pillPaddingV = dpToPx(context, 7f).toFloat()
-    private val pillMarginTop = dpToPx(context, 48f).toFloat()
-    private val pillMarginRight = dpToPx(context, 12f).toFloat()
+    private val cardRect = RectF()
 
-    // ── Runnable for auto-hiding the pill ─────────────────────────────────────
-
-    private val hidePillRunnable = Runnable {
-        pillVisible = false
-        invalidate()
-    }
-
-    // ── Public methods ────────────────────────────────────────────────────────
-
-    /**
-     * Update the visual lock state and show the pill indicator briefly.
-     * Called by OverlayService after toggling lock in WindowManager.
-     */
-    fun setLocked(locked: Boolean) {
-        isLocked = locked
-        showPill(if (locked) 4000L else 3000L)
-        invalidate()
-    }
-
-    /** Show the pill indicator for [durationMs] ms. Call this immediately on state change. */
-    private fun showPill(durationMs: Long) {
-        removeCallbacks(hidePillRunnable)
-        pillVisible = true
-        invalidate()
-        postDelayed(hidePillRunnable, durationMs)
-    }
-
-    // ── Touch event handling ──────────────────────────────────────────────────
+    // ── Touch ─────────────────────────────────────────────────────────────────
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.action == MotionEvent.ACTION_DOWN) {
-            tapTimes[0] = tapTimes[1]
-            tapTimes[1] = tapTimes[2]
-            tapTimes[2] = SystemClock.uptimeMillis()
+        if (event.action != MotionEvent.ACTION_DOWN) return true
 
-            val span = tapTimes[2] - tapTimes[0]
-            if (tapTimes[0] != 0L && span <= TAP_TIMEOUT_MS) {
-                onTripleTapDetected()
-                tapTimes.fill(0L)
+        val now = SystemClock.uptimeMillis()
+        val x = event.x; val y = event.y
+
+        // Position gate — if tap is too far from anchor, restart sequence here
+        if (anchorX >= 0f) {
+            val dist = hypot(x - anchorX, y - anchorY)
+            if (dist > tapRadiusPx) {
+                Log.d(TAG, "Tap ${dist.toInt()}px from anchor — resetting (limit ${tapRadiusPx.toInt()}px)")
+                tapTimes.fill(0L); tapProgress = 0
+                anchorX = x; anchorY = y
+                tapTimes[2] = now; tapProgress = 1
+                removeCallbacks(resetRunnable); postDelayed(resetRunnable, TAP_RESET_MS)
+                invalidate(); return true
             }
+        } else {
+            anchorX = x; anchorY = y   // first tap — set anchor
         }
-        // Always consume — WindowManager.FLAG_NOT_TOUCHABLE handles pass-through in unlocked mode
+
+        // Shift ring buffer
+        tapTimes[0] = tapTimes[1]; tapTimes[1] = tapTimes[2]; tapTimes[2] = now
+        val span = tapTimes[2] - tapTimes[0]
+        Log.v(TAG, "DOWN (${x.toInt()},${y.toInt()}) span=${span}ms anchor=(${anchorX.toInt()},${anchorY.toInt()})")
+
+        // Triple-tap check
+        if (tapTimes[0] != 0L && span <= TAP_TIMEOUT_MS) {
+            Log.i(TAG, "✅ Triple-tap! span=${span}ms — deactivating")
+            tapTimes.fill(0L); tapProgress = 0; anchorX = -1f; anchorY = -1f
+            removeCallbacks(resetRunnable)
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            invalidate()
+            onToggleCallback?.invoke() ?: Log.w(TAG, "callback is null!")
+            return true
+        }
+
+        // Update progress for pill display
+        tapProgress = if (tapTimes[1] != 0L && (tapTimes[2] - tapTimes[1]) <= TAP_TIMEOUT_MS) 2 else 1
+        Log.d(TAG, "Tap progress: $tapProgress/3")
+        removeCallbacks(resetRunnable); postDelayed(resetRunnable, TAP_RESET_MS)
+        invalidate()
         return true
     }
 
-    private fun onTripleTapDetected() {
-        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-        // Show pill immediately as feedback before service updates lock state
-        showPill(400L)
-        onToggleCallback?.invoke()
-    }
-
-    // ── Drawing ───────────────────────────────────────────────────────────────
+    // ── Draw ──────────────────────────────────────────────────────────────────
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        val dotsH   = if (tapProgress > 0) dpToPx(context, 22f).toFloat() else 0f
+        val cardH   = cardPad + dpToPx(context, 28f).toFloat() + dotsH + cardPad
+        val cardR   = width - cardMarginR
+        val cardL   = cardR - cardW
+        val cardT   = cardMarginT
+        val cardB   = cardT + cardH
+        val cx      = (cardL + cardR) / 2f
 
-        val w = width.toFloat()
-        val h = height.toFloat()
+        cardRect.set(cardL, cardT, cardR, cardB)
+        canvas.drawRoundRect(cardRect, cardCorner, cardCorner, bgPaint)
 
-        if (isLocked) {
-            // Faint amber background tint
-            canvas.drawRect(0f, 0f, w, h, bgPaint)
-            // Amber border around entire screen
-            val half = borderPaint.strokeWidth / 2f
-            canvas.drawRect(half, half, w - half, h - half, borderPaint)
+        // Lock icon
+        lockDrawable?.let {
+            val iconSize = dpToPx(context, 28f).toInt()
+            val left = cx.toInt() - iconSize / 2
+            val top = (cardT + cardPad).toInt()
+            it.setBounds(left, top, left + iconSize, top + iconSize)
+            it.draw(canvas)
         }
 
-        if (pillVisible) {
-            drawPill(canvas, w)
+        // Progress dots (3 dots: filled = done, ring = pending)
+        if (tapProgress > 0) {
+            val dotY  = cardB - cardPad - dotR
+            val dot1X = cx - dotGap
+            val dot2X = cx
+            val dot3X = cx + dotGap
+
+            canvas.drawCircle(dot1X, dotY, dotR, dotFilled)
+            canvas.drawCircle(dot2X, dotY, dotR, if (tapProgress >= 2) dotFilled else dotEmpty)
+            canvas.drawCircle(dot3X, dotY, dotR, dotEmpty)
         }
+
+        Log.v(TAG, "onDraw tapProgress=$tapProgress")
     }
 
-    private fun drawPill(canvas: Canvas, viewWidth: Float) {
-        val text = if (isLocked) "🔒 LOCKED" else "🔓 Tap 3x to lock"
-
-        val textWidth = pillTextPaint.measureText(text)
-        val pillWidth = textWidth + pillPaddingH * 2
-        val pillHeight = pillTextPaint.textSize + pillPaddingV * 2
-
-        val right = viewWidth - pillMarginRight
-        val left = right - pillWidth
-        val top = pillMarginTop
-        val bottom = top + pillHeight
-
-        pillRect.set(left, top, right, bottom)
-        canvas.drawRoundRect(pillRect, pillCornerRadius, pillCornerRadius, pillBgPaint)
-
-        // Vertically center text in pill
-        val textY = top + pillPaddingV + pillTextPaint.textSize - pillTextPaint.descent()
-        canvas.drawText(text, left + pillPaddingH, textY, pillTextPaint)
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        Log.d(TAG, "onSizeChanged: ${w}×${h}")
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        removeCallbacks(hidePillRunnable)
+        removeCallbacks(resetRunnable)
+        Log.d(TAG, "onDetachedFromWindow")
     }
 }

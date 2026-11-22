@@ -57,6 +57,10 @@ goto fail
 set JAVA_HOME=%JAVA_HOME:"=%
 set JAVA_EXE=%JAVA_HOME%/bin/java.exe
 
+if not exist "%JAVA_EXE%" if exist "D:\Tools\Android\AndroidStudio\jbr\bin\java.exe" (
+    set "JAVA_HOME=D:\Tools\Android\AndroidStudio\jbr"
+    set "JAVA_EXE=D:\Tools\Android\AndroidStudio\jbr\bin\java.exe"
+)
 if exist "%JAVA_EXE%" goto execute
 
 echo. 1>&2

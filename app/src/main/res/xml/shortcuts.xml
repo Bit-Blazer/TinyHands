@@ -13,8 +13,6 @@
             android:targetPackage="com.bitblazer.tinyhands"
             android:targetClass="com.bitblazer.tinyhands.ShortcutHandlerActivity" />
 
-        <categories android:name="android.shortcut.conversation" />
-
     </shortcut>
 
 </shortcuts>
